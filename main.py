@@ -33,7 +33,7 @@ def crawl_website(url: str, limit: int = None) -> str:
         params["limit"] = limit
 
     try:
-        crawl_result = app.crawl_url(url, params=params, poll_interval=30)
+        crawl_result = app.scrape_url(url, params={'formats': ['markdown']})
         return json.dumps(crawl_result)
     except Exception as e:
         return json.dumps({"error": str(e)})
@@ -89,11 +89,6 @@ def main():
                             "url": {
                                 "type": "string",
                                 "description": "The URL to crawl",
-                            },
-                            "limit": {
-                                "type": "integer",
-                                "description": "The maximum number of pages to crawl",
-                                "optional": True,
                             },
                         },
                         "required": ["url"],
