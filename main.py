@@ -10,6 +10,7 @@ import agent_prompt
 import agent_rules
 import system_prompt
 from editor_tool import EditorTool
+from shell_tool import ShellTool
 
 
 def crawl_website(url: str, limit: int = None) -> str:
@@ -63,12 +64,18 @@ def main():
     # Initialize editor with workspace root path
     workspace_root = Path(os.getcwd())
     editor = EditorTool(root_path=workspace_root)
+    shell = ShellTool(root_path=workspace_root)
 
     # Add the initial message to history
+    # user_message = {
+    #     "role": "user",
+    #     "content": agent_prompt.agent_prompt + agent_rules.agent_rules
+    #     + "Crawl the website, https://docs.anthropic.com/en/docs/about-claude/models/all-models, and give me a summary, and save it to 'summary.md'",
+    # }
     user_message = {
         "role": "user",
         "content": agent_prompt.agent_prompt + agent_rules.agent_rules
-        + "Crawl the website, https://docs.anthropic.com/en/docs/about-claude/models/all-models, and give me a summary, and save it to 'summary.md'",
+        + "Crawl the website, https://docs.anthropic.com/en/docs/about-claude/models/all-models, and give me a summary, write a python script called process.py to process the crawl results and output a file called 'summary.md', and save it to 'process.py', then execute the script using shell_tool",
     }
     conversation_history.append(user_message)
 
@@ -105,13 +112,13 @@ def main():
                         "required": [],
                     },
                 },
-            ],
+            ] + shell.to_params(),
             model="claude-3-5-sonnet-latest",
         )
 
         # Add assistant's response to history
         text_contents = [
-            content.text for content in message.content if content.type == "text"
+            content.text.rstrip() for content in message.content if content.type == "text"
         ]
         assistant_message = {
             "role": "assistant",
@@ -163,6 +170,22 @@ def main():
                         conversation_history.append(user_message)
                     except Exception as e:
                         # print(f"Error executing editor: {str(e)}")
+                        user_message = {
+                            "role": "user",
+                            "content": f"Error executing {content.name}: {str(e)}",
+                        }
+                        conversation_history.append(user_message)
+                elif content.name == "shell_tool":
+                    try:
+                        result = shell(**content.input)
+                        print(f"\nShell results:\n{result}")
+                        user_message = {
+                            "role": "user",
+                            "content": f"Tool '{content.name}' returned: {result}",
+                        }
+                        conversation_history.append(user_message)
+                    except Exception as e:
+                        # print(f"Error executing shell: {str(e)}")
                         user_message = {
                             "role": "user",
                             "content": f"Error executing {content.name}: {str(e)}",
