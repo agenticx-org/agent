@@ -1,8 +1,14 @@
 import json
 import os
+from pathlib import Path
+from textwrap import dedent
 
 from anthropic import Anthropic
 from firecrawl import FirecrawlApp
+
+import agent_prompt
+import system_prompt
+from editor_tool import EditorTool
 
 
 def crawl_website(url: str, limit: int = None) -> str:
@@ -47,16 +53,21 @@ def main():
         api_key=os.environ.get("ANTHROPIC_API_KEY"),
     )
 
-    # Initialize conversation history
+    # Initialize conversation history and editor tool
     conversation_history = []
     max_iterations = 10  # Maximum number of iterations
     current_iteration = 0
     task_completed = False
 
+    # Initialize editor with workspace root path
+    workspace_root = Path(os.getcwd())
+    editor = EditorTool(root_path=workspace_root)
+
     # Add the initial message to history
     user_message = {
         "role": "user",
-        "content": "Crawl the website, https://docs.anthropic.com/en/docs/about-claude/models/all-models, and give me a summary.",
+        "content": agent_prompt.agent_prompt
+        + "Crawl the website, https://docs.anthropic.com/en/docs/about-claude/models/all-models, and give me a summary, and save it to 'summary.md'",
     }
     conversation_history.append(user_message)
 
@@ -67,6 +78,7 @@ def main():
         message = client.messages.create(
             max_tokens=8096,
             messages=conversation_history,
+            system=system_prompt.system_prompt,
             tools=[
                 {
                     "name": "crawl_website",
@@ -87,6 +99,7 @@ def main():
                         "required": ["url"],
                     },
                 },
+                editor.to_params(),
                 {
                     "name": "terminate",
                     "description": "Call this function when the task is complete to end the agent loop",
@@ -101,11 +114,12 @@ def main():
         )
 
         # Add assistant's response to history
+        text_contents = [
+            content.text for content in message.content if content.type == "text"
+        ]
         assistant_message = {
             "role": "assistant",
-            "content": [
-                content.text for content in message.content if content.type == "text"
-            ][0],
+            "content": text_contents[0] if text_contents else "",
         }
         conversation_history.append(assistant_message)
 
@@ -140,7 +154,22 @@ def main():
                             "content": f"Error executing {content.name}: {str(e)}",
                         }
                         conversation_history.append(user_message)
-
+                elif content.name == editor.name:  # Use the editor's name constant
+                    try:
+                        result = editor(**content.input)
+                        print(f"\nEditor results:\n{result}")
+                        user_message = {
+                            "role": "user",
+                            "content": f"Tool '{content.name}' returned: {result}",
+                        }
+                        conversation_history.append(user_message)
+                    except Exception as e:
+                        print(f"Error executing editor: {str(e)}")
+                        user_message = {
+                            "role": "user",
+                            "content": f"Error executing {content.name}: {str(e)}",
+                        }
+                        conversation_history.append(user_message)
                 elif content.name == "terminate":
                     result = terminate()
                     print("\nTerminating agent loop...")
