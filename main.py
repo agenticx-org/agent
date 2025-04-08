@@ -1,45 +1,32 @@
-from agent import Agent
-from agent.tools.thinking_tools import ThinkingTools
+import os
+from textwrap import dedent
 
+from agno.agent import Agent
+from agno.models.anthropic import Claude
+from agno.tools.e2b import E2BTools
+from agno.tools.thinking import ThinkingTools
+from dotenv import load_dotenv
 
-def main():
-    # Create a thinking tools instance
-    thinking_tools = ThinkingTools()
+from prompts import agentic_loop, system_prompt
 
-    # Create a sample agent with a specific model and thinking tools
-    sample_agent = Agent(
-        name="Research Assistant",
-        description="An agent that helps with research tasks",
-        system_prompt="""You are a helpful research assistant that provides accurate information.
+# Load environment variables from .env file
+load_dotenv()
 
-When using the think tool, follow these guidelines:
-1. Break down complex topics into distinct aspects or perspectives
-2. Use a separate think call for each distinct aspect or perspective
-3. Build upon previous thoughts to develop a comprehensive analysis
-4. Never repeat the same thought multiple times
-5. After analyzing from multiple angles, synthesize the insights into a final response
+e2b_tools = E2BTools(
+    timeout=600,
+)
 
-For example, when analyzing AI impact:
-- First thought: Economic implications
-- Second thought: Social and cultural changes
-- Third thought: Safety and security considerations
-- Fourth thought: Ethical implications
-- Final response: Synthesis of all perspectives""",
-        tool_registry=thinking_tools.get_registry(),
-        max_steps=10,
-        model_id="claude-3-7-sonnet-latest",
-    )
+agent = Agent(
+    model=Claude(id="claude-3-7-sonnet-latest", api_key=os.getenv("ANTHROPIC_API_KEY")),
+    tools=[ThinkingTools(), e2b_tools],
+    show_tool_calls=True,
+    system_message=system_prompt,
+    instructions=agentic_loop,
+    markdown=True,
+    reasoning_max_steps=50,
+    debug_mode=True,
+)
 
-    # Run the agent with some input that requires reasoning
-    result = sample_agent.process_loop(
-        "Explain the potential impact of large-scale agentic AI systems on society. Think through multiple perspectives."
-    )
-    print("\nAgent response:")
-    print(result["final_response"] if "final_response" in result else result)
-
-    # Reset the agent for a new task
-    sample_agent.reset()
-
-
-if __name__ == "__main__":
-    main()
+agent.print_response(
+    "Write Python code to generate the first 10 Fibonacci numbers and calculate their sum and average"
+)
