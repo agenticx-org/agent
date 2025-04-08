@@ -7,6 +7,7 @@ from anthropic import Anthropic
 from firecrawl import FirecrawlApp
 
 import agent_prompt
+import agent_rules
 import system_prompt
 from editor_tool import EditorTool
 
@@ -39,7 +40,7 @@ def crawl_website(url: str, limit: int = None) -> str:
         return json.dumps({"error": str(e)})
 
 
-def terminate() -> str:
+def idle() -> str:
     """Signals that the agent has completed its task.
 
     Returns:
@@ -66,14 +67,14 @@ def main():
     # Add the initial message to history
     user_message = {
         "role": "user",
-        "content": agent_prompt.agent_prompt
+        "content": agent_prompt.agent_prompt + agent_rules.agent_rules
         + "Crawl the website, https://docs.anthropic.com/en/docs/about-claude/models/all-models, and give me a summary, and save it to 'summary.md'",
     }
     conversation_history.append(user_message)
 
     while not task_completed and current_iteration < max_iterations:
         current_iteration += 1
-        print(f"\n=== Iteration {current_iteration} ===")
+        # print(f"\n=== Iteration {current_iteration} ===")
 
         message = client.messages.create(
             max_tokens=8096,
@@ -96,8 +97,8 @@ def main():
                 },
                 editor.to_params(),
                 {
-                    "name": "terminate",
-                    "description": "Call this function when the task is complete to end the agent loop",
+                    "name": "idle",
+                    "description": "Call this function when the current task is complete",
                     "input_schema": {
                         "type": "object",
                         "properties": {},
@@ -105,7 +106,7 @@ def main():
                     },
                 },
             ],
-            model="claude-3-7-sonnet-latest",
+            model="claude-3-5-sonnet-latest",
         )
 
         # Add assistant's response to history
@@ -118,23 +119,25 @@ def main():
         }
         conversation_history.append(assistant_message)
 
-        print("Full message response:", message)
-        print("\nContent blocks:")
+        # print("Full message response:", message)
+        # print("\nContent blocks:")
+        print(message.content)
 
         # Process each content block
         for content in message.content:
-            print(f"\nProcessing content block type: {content.type}")
+            # print(f"\nProcessing content block type: {content.type}")
 
             if content.type == "text":
-                print("Text content:", content.text)
+                # print("Text content:", content.text)
+                pass
             elif content.type == "tool_use":
-                print(f"Tool use found: {content.name}")
-                print(f"Parameters: {content.input}")
+                # print(f"Tool use found: {content.name}")
+                # print(f"Parameters: {content.input}")
 
                 if content.name == "crawl_website":
                     try:
                         result = crawl_website(**content.input)
-                        print(f"\nCrawl results:\n{result}")
+                        # print(f"\nCrawl results:\n{result}")
 
                         # Add tool result as part of assistant's next message
                         user_message = {
@@ -143,7 +146,7 @@ def main():
                         }
                         conversation_history.append(user_message)
                     except Exception as e:
-                        print(f"Error executing crawl: {str(e)}")
+                        # print(f"Error executing crawl: {str(e)}")
                         user_message = {
                             "role": "user",
                             "content": f"Error executing {content.name}: {str(e)}",
@@ -159,14 +162,14 @@ def main():
                         }
                         conversation_history.append(user_message)
                     except Exception as e:
-                        print(f"Error executing editor: {str(e)}")
+                        # print(f"Error executing editor: {str(e)}")
                         user_message = {
                             "role": "user",
                             "content": f"Error executing {content.name}: {str(e)}",
                         }
                         conversation_history.append(user_message)
-                elif content.name == "terminate":
-                    result = terminate()
+                elif content.name == "idle":
+                    result = idle()
                     print("\nTerminating agent loop...")
                     task_completed = True
                     user_message = {
