@@ -485,7 +485,6 @@ with open("output.md", "w") as f:
     f.write("Hello, world!")
 ```
 
-
 **Planning and Findings:**
 - Use the `update_plan` tool *at the beginning of each reasoning step* to keep track of your progress using the markdown checklist format.
 - Before calling `final_answer`, use the `record_findings` tool to summarize your key results and conclusions in markdown format.
