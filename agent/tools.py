@@ -223,53 +223,24 @@ class ToolManager:
             return f"Error: Tool '{tool_name}' not found."
 
         logger.info(f"Executing tool '{tool_name}' with args: {tool_args}")
-        # Print to CLI
-        print(f"\n[TOOL CALL] -> {tool_name}")
-        print(f"  Args: {json.dumps(tool_args)}")
 
         try:
             # Inject dependencies for built-in tools requiring state/executor
             if tool_name == "execute_python":
-                # Special CLI print for pending code
-                print(f"  Code:\n```python\n{tool_args.get('code', '')}\n```")
-                print("[STATUS] Executing Python code...")
                 result = tool_function(
                     self.code_executor, self.state_manager, **tool_args
                 )
             elif tool_name in ["update_plan", "record_findings", "final_answer"]:
-                print(f"[STATUS] Executing tool: {tool_name}...")
                 result = tool_function(self.state_manager, **tool_args)
             else:
                 # Execute custom tools directly
-                print(f"[STATUS] Executing tool: {tool_name}...")
                 result = tool_function(**tool_args)
-
-            # Print result to CLI
-            print(f"[OBSERVATION] <- [{tool_name}] Result:")
-            if isinstance(
-                result, dict
-            ):  # Nicer print for dicts (like python exec result)
-                print(f"  stdout: {result.get('stdout')}")
-                print(f"  error: {result.get('error')}")
-            elif (
-                isinstance(result, str) and "\n" in result
-            ):  # Print multi-line strings nicely
-                print("```")
-                print(result)
-                print("```")
-            else:
-                print(f"  {result}")
-            print("-" * 20)
 
             return result  # Return the actual result object/value
 
         except Exception as e:
             logger.error(f"Error executing tool '{tool_name}': {e}", exc_info=True)
             error_msg = f"Error executing tool '{tool_name}': {type(e).__name__}: {e}"
-            # Print error to CLI
-            print(f"[OBSERVATION] <- [{tool_name}] ERROR:")
-            print(f"  {error_msg}")
-            print("-" * 20)
             return error_msg  # Return error message string for the LLM
 
     def get_callable_tools_for_eval(self) -> Dict[str, Callable]:

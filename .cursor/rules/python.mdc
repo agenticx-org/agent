@@ -1,0 +1,9 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# uv package manager
+Always check the pyproject.toml to see if the dependency exists before installing.
+If it doesn't exist, we use the uv package manager. uv add 'package'.

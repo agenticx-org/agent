@@ -1,8 +1,9 @@
 import importlib
+import json
 import logging
 import sys
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from agent.code_executor import CodeExecutor
 from agent.llm import LLMInteraction
@@ -19,13 +20,17 @@ class Agent:
     def __init__(self, task: str, authorized_imports=None, model_id=None):
         self.task = task
         self.authorized_imports = authorized_imports or []
-        print(f"[INFO] Initializing Agent for task: {self.task}")
+        self._output_json(
+            {"type": "status", "content": f"Initializing Agent for task: {self.task}"}
+        )
 
         # Initialize components
         try:
             self.llm = LLMInteraction(model_id=model_id)
         except ValueError as e:
-            print(f"[ERROR] Failed to initialize LLM: {e}")
+            self._output_json(
+                {"type": "error", "content": f"Failed to initialize LLM: {e}"}
+            )
             sys.exit(1)
 
         # Init StateManager with temporary prompt
@@ -53,10 +58,10 @@ class Agent:
         self.state_manager.set_initial_globals(initial_globals)  # Set in state
         self.code_executor.globals_locals = initial_globals  # Update executor directly
 
-        print("[INFO] Agent initialized successfully.")
-        print("--- INITIAL PLAN ---")
-        print(self.state_manager.get_plan())
-        print("--------------------\n")
+        self._output_json(
+            {"type": "status", "content": "Agent initialized successfully."}
+        )
+        self._output_json({"type": "plan", "content": self.state_manager.get_plan()})
 
     def _prepare_initial_globals(self) -> Dict[str, Any]:
         """Prepares the initial global scope for the CodeExecutor."""
@@ -81,15 +86,19 @@ class Agent:
 
         return initial_globals
 
+    def _output_json(self, data: Dict[str, Any]) -> None:
+        """Prints data in a uniform JSON format."""
+        print(json.dumps(data))
+
     def run(self, max_iterations=15):
         """Runs the agent's main loop for CLI."""
-        print("[STATUS] Agent starting run loop...")
+        self._output_json({"type": "status", "content": "Agent starting run loop..."})
         iterations = 0
 
         while not self.state_manager.check_done() and iterations < max_iterations:
             iterations += 1
-            print(f"\n=========== AGENT ITERATION {iterations} ===========")
-            print("[STATUS] Preparing LLM request...")
+            self._output_json({"type": "iteration_start", "iteration": iterations})
+            self._output_json({"type": "status", "content": "Preparing LLM request..."})
 
             # 1. Get state for LLM
             messages = self.state_manager.get_history()
@@ -97,14 +106,17 @@ class Agent:
             tool_definitions = self.tool_manager.get_tool_definitions()
 
             # 2. Call LLM
-            print("[STATUS] Calling LLM...")
+            self._output_json({"type": "status", "content": "Calling LLM..."})
             response_message = self.llm.generate_response(
                 messages, system_prompt, tool_definitions
             )
 
             if response_message is None or response_message.content is None:
-                print(
-                    "[ERROR] LLM interaction failed or returned empty content. Terminating."
+                self._output_json(
+                    {
+                        "type": "error",
+                        "content": "LLM interaction failed or returned empty content. Terminating.",
+                    }
                 )
                 break
 
@@ -115,9 +127,7 @@ class Agent:
             executed_tool_this_turn = False
             for block in response_message.content:
                 if block.type == "text":
-                    print("\n[THOUGHT]")
-                    print(block.text)
-                    print("-" * 20)
+                    self._output_json({"type": "thought", "content": block.text})
 
                 elif block.type == "tool_use":
                     tool_name = block.name
@@ -125,7 +135,22 @@ class Agent:
                     tool_use_id = block.id
                     executed_tool_this_turn = True
 
-                    # Execute the tool (prints call/status/observation within execute_tool)
+                    # Log the tool call
+                    self._output_json(
+                        {"type": "tool_call", "tool": tool_name, "args": tool_input}
+                    )
+
+                    # Special handling for code execution
+                    if tool_name == "execute_python":
+                        self._output_json(
+                            {"type": "code", "content": tool_input.get("code", "")}
+                        )
+
+                    self._output_json(
+                        {"type": "status", "content": f"Executing tool: {tool_name}..."}
+                    )
+
+                    # Execute the tool
                     result = self.tool_manager.execute_tool(tool_name, tool_input)
 
                     # Determine if result indicates an error
@@ -138,40 +163,65 @@ class Agent:
                         is_error = True
                         result_content_for_llm = f"Error during execution: {result['error']}"  # Pass error string to LLM
 
+                    # Format tool result as JSON
+                    result_output = {
+                        "type": "tool_result",
+                        "tool": tool_name,
+                        "success": not is_error,
+                    }
+
+                    # Format the result content based on its type
+                    if isinstance(result, dict):
+                        if "stdout" in result:
+                            result_output["stdout"] = result.get("stdout")
+                        if "error" in result:
+                            result_output["error"] = result.get("error")
+                    else:
+                        result_output["content"] = str(result)
+
+                    self._output_json(result_output)
+
                     # Add tool result message to state for the *next* LLM call
                     self.state_manager.add_tool_result(
                         tool_use_id=tool_use_id,
                         result=result_content_for_llm,  # Send stringified/error detail to LLM
                         is_error=is_error,
                     )
-                    # Plan/Findings updates are printed within their state_manager methods
 
             if (
                 not executed_tool_this_turn
                 and response_message.stop_reason == "stop_sequence"
             ):
-                print(
-                    "[WARNING] LLM finished turn without using a tool. Task may be stalled."
+                self._output_json(
+                    {
+                        "type": "warning",
+                        "content": "LLM finished turn without using a tool. Task may be stalled.",
+                    }
                 )
-                # Potential loop break or re-prompt logic could go here
 
+            self._output_json({"type": "iteration_end", "iteration": iterations})
             # Optional delay
             time.sleep(0.5)
 
         # Loop finished
-        print("\n=========== AGENT FINISHED ===========")
+        self._output_json({"type": "execution_complete"})
         if self.state_manager.check_done():
             final_answer = self.state_manager.get_final_answer()
-            print("\n[FINAL ANSWER]")
-            print(final_answer)
-            print("-" * 20)
-            print("[STATUS] Task completed successfully.")
+            self._output_json({"type": "final_answer", "content": final_answer})
+            self._output_json(
+                {"type": "status", "content": "Task completed successfully."}
+            )
         elif iterations >= max_iterations:
-            print("[ERROR] Agent reached maximum iterations.")
-            print("[STATUS] Task incomplete (max iterations).")
+            self._output_json(
+                {"type": "error", "content": "Agent reached maximum iterations."}
+            )
+            self._output_json(
+                {"type": "status", "content": "Task incomplete (max iterations)."}
+            )
         else:
-            print("[WARNING] Agent loop exited unexpectedly.")
-            print("[STATUS] Task incomplete.")
-        print("======================================")
+            self._output_json(
+                {"type": "warning", "content": "Agent loop exited unexpectedly."}
+            )
+            self._output_json({"type": "status", "content": "Task incomplete."})
 
         return self.state_manager.get_final_answer()

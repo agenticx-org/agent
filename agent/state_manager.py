@@ -100,10 +100,8 @@ class StateManager:
     def update_plan(self, plan_markdown: str):
         self.plan = plan_markdown
         logger.info("Plan updated.")
-        # Print update to CLI
-        print("\n--- PLAN UPDATED ---")
-        print(self.plan)
-        print("--------------------\n")
+        # Print JSON output instead of direct printing
+        print(json.dumps({"type": "plan", "content": self.plan}))
 
     def get_plan(self) -> str:
         return self.plan
@@ -111,10 +109,8 @@ class StateManager:
     def update_findings(self, findings_markdown: str):
         self.findings = findings_markdown
         logger.info("Findings updated.")
-        # Print update to CLI
-        print("\n--- FINDINGS RECORDED ---")
-        print(self.findings)
-        print("-------------------------\n")
+        # Print JSON output instead of direct printing
+        print(json.dumps({"type": "findings", "content": self.findings}))
 
     def get_findings(self) -> str:
         return self.findings
