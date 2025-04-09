@@ -12,21 +12,16 @@ import random # For example search tool
 from typing import Dict, Any, List, Callable, Optional
 
 from dotenv import load_dotenv
-from anthropic import AnthropicBedrock, Anthropic # Use appropriate client
-# Note: Boto3 is imported implicitly by anthropic[bedrock] or used directly if needed
+from anthropic import Anthropic # Use only the regular Anthropic client
 
 # --- Configuration Loading ---
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("CLI_Agent")
 
-# --- Anthropic/Bedrock Configuration ---
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY") # Used if not using Bedrock
-BEDROCK_AWS_ACCESS_KEY_ID = os.getenv("BEDROCK_AWS_ACCESS_KEY_ID")
-BEDROCK_AWS_SECRET_ACCESS_KEY = os.getenv("BEDROCK_AWS_SECRET_ACCESS_KEY")
-BEDROCK_AWS_REGION = os.getenv("BEDROCK_AWS_REGION", "us-east-1")
-MODEL_ID = os.getenv("MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
-USE_BEDROCK = bool(BEDROCK_AWS_ACCESS_KEY_ID and BEDROCK_AWS_SECRET_ACCESS_KEY)
+# --- Anthropic Configuration ---
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+MODEL_ID = os.getenv("MODEL_ID", "claude-3-haiku-20240307")
 
 # --- Agent Configuration ---
 RAW_AUTHORIZED_IMPORTS = os.getenv("AUTHORIZED_IMPORTS", "math,random,datetime,json,re")
@@ -119,23 +114,11 @@ def search(query: str) -> str:
 class LLMInteraction:
     """Handles communication with the Anthropic API."""
     def __init__(self):
-        if USE_BEDROCK:
-            logger.info(f"Initializing Anthropic Bedrock client for region {BEDROCK_AWS_REGION}")
-            try:
-                self.client = AnthropicBedrock(
-                    aws_access_key=BEDROCK_AWS_ACCESS_KEY_ID,
-                    aws_secret_key=BEDROCK_AWS_SECRET_ACCESS_KEY,
-                    aws_region=BEDROCK_AWS_REGION,
-                )
-            except Exception as e:
-                logger.error(f"Failed to initialize Bedrock client: {e}")
-                raise ValueError("Bedrock client initialization failed. Check credentials and region.") from e
-        elif ANTHROPIC_API_KEY:
-            logger.info("Initializing direct Anthropic API client.")
-            self.client = Anthropic(api_key=ANTHROPIC_API_KEY)
-        else:
-            raise ValueError("No API credentials configured for Anthropic or Bedrock.")
+        if not ANTHROPIC_API_KEY:
+            raise ValueError("No API key configured for Anthropic. Please set ANTHROPIC_API_KEY in environment variables.")
 
+        logger.info("Initializing Anthropic API client.")
+        self.client = Anthropic(api_key=ANTHROPIC_API_KEY)
         self.model_id = MODEL_ID
         logger.info(f"Using model: {self.model_id}")
 
@@ -468,7 +451,7 @@ def get_system_prompt(tool_definitions: List[dict], authorized_imports: List[str
     auth_imports_list = ", ".join(authorized_imports) if authorized_imports else "None"
 
     # Using the same detailed prompt structure
-    prompt = f"""You are an expert research assistant agent designed to solve complex tasks step-by-step using a limited set of tools. Your goal is to fully address the user's TASK.
+    prompt = """You are an expert research assistant agent designed to solve complex tasks step-by-step using a limited set of tools. Your goal is to fully address the user's TASK.
 
 **Workflow:**
 1.  **Think:** Analyze the task and your current progress. Update your plan using the `update_plan` tool. Maintain the markdown checklist format. Check off completed items '[x]' and detail the next steps '[ ]'. Output your reasoning.
@@ -477,14 +460,31 @@ def get_system_prompt(tool_definitions: List[dict], authorized_imports: List[str
 4.  **Repeat:** Use the observation to inform your next Thought/Plan update and subsequent action. Continue until the task is fully resolved.
 
 **Available Tools:**
-You have access to the following tools. Use them strictly according to their descriptions and input schemas:
-{formatted_tool_descriptions}
-
-**Python Execution (`execute_python` tool):**
+You have access to the following tools. Use them strictly according to their descriptions and input schemas:""" + formatted_tool_descriptions + """**Python Execution (`execute_python` tool):**
 - The Python execution environment is stateful. Variables and imports persist across `execute_python` calls within the same task.
-- Only use imports from this allowed list: {auth_imports_list}.
-- Use `print()` within your Python code to output intermediate results or data you need for subsequent steps. These print outputs will be returned as the observation's 'stdout'.
+- Only use imports from this allowed list: """ + auth_imports_list + """- Use `print()` within your Python code to output intermediate results or data you need for subsequent steps. These print outputs will be returned as the observation's 'stdout'.
 - Handle potential errors gracefully within your Python code if possible.
+
+**Python Helper Functions:**
+Here is a list of helper functions that you can import to use in your code:
+
+1. Firecrawl:
+```python
+from firecrawl import FirecrawlApp
+import os
+url = "https://www.google.com"
+
+# Initialize the FirecrawlApp with your API key
+app = FirecrawlApp(api_key=os.getenv("FIRECRAWL_API_KEY"))
+scrape_result = app.scrape_url(url, params={'formats': ['markdown']})
+print(scrape_result["markdown"])```
+
+2. File output:
+```python
+with open("output.md", "w") as f:
+    f.write("Hello, world!")
+```
+
 
 **Planning and Findings:**
 - Use the `update_plan` tool *at the beginning of each reasoning step* to keep track of your progress using the markdown checklist format.
@@ -664,9 +664,9 @@ if __name__ == "__main__":
     print("         Command Line Agent Runner")
     print("*" * 50)
 
-    if not (USE_BEDROCK or ANTHROPIC_API_KEY):
-        print("[ERROR] No Anthropic/Bedrock credentials found in environment variables.")
-        print("Please set ANTHROPIC_API_KEY or BEDROCK_AWS_ACCESS_KEY_ID/BEDROCK_AWS_SECRET_ACCESS_KEY.")
+    if not ANTHROPIC_API_KEY:
+        print("[ERROR] No Anthropic API key found in environment variables.")
+        print("Please set ANTHROPIC_API_KEY in your environment.")
         sys.exit(1)
 
     try:
