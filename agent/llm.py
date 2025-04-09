@@ -1,115 +1,48 @@
+import logging
 import os
+from typing import Any, Dict, List
 
-import anthropic
-from dotenv import load_dotenv
+from anthropic import Anthropic
 
-load_dotenv()
+logger = logging.getLogger("CLI_Agent")
 
 
-class LLM:
-    def __init__(
-        self,
-        model_id="claude-3-7-sonnet-latest",
-        api_key=None,
-        **kwargs,
-    ):
-        """
-        Initialize an LLM instance that uses the Anthropic SDK under the hood.
+class LLMInteraction:
+    """Handles communication with the Anthropic API."""
 
-        Args:
-            model_id (str, optional): The model ID to use. Defaults to "claude-3-7-sonnet-latest".
-            api_key (str, optional): Anthropic API key. Defaults to None (will use ANTHROPIC_API_KEY env var).
-            **kwargs: Additional parameters to pass to the Anthropic client
-        """
-        self.model_id = model_id
-        # Use provided API key or fall back to environment variable
+    def __init__(self, api_key=None, model_id=None):
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
-        self.kwargs = kwargs
-
-        # Filter out 'organization' from kwargs if present
-        if "organization" in kwargs:
-            kwargs_copy = kwargs.copy()
-            kwargs_copy.pop("organization")
-            self.client = anthropic.Anthropic(api_key=self.api_key, **kwargs_copy)
+        if self.api_key:
+            logger.info("Initializing Anthropic API client.")
+            self.client = Anthropic(api_key=self.api_key)
         else:
-            self.client = anthropic.Anthropic(api_key=self.api_key, **kwargs)
+            raise ValueError("No API credentials configured for Anthropic.")
 
-    def generate(self, prompt, system_prompt=None, max_tokens=4096, temperature=0.7):
-        """
-        Generate a response from the LLM.
+        self.model_id = model_id or os.getenv("MODEL_ID", "claude-3-7-sonnet-latest")
+        logger.info(f"Using model: {self.model_id}")
 
-        Args:
-            prompt (str): The user prompt to send to the LLM
-            system_prompt (str, optional): System instructions for the LLM. Defaults to None.
-            max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 4096.
-            temperature (float, optional): Sampling temperature. Defaults to 0.7.
-
-        Returns:
-            dict: The response from the LLM
-        """
+    def generate_response(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: str,
+        tools: List[Dict[str, Any]],
+    ) -> Any:
+        """Sends messages to the Anthropic API and gets the response."""
+        logger.info(
+            f"Sending request to {self.model_id} with {len(messages)} messages and {len(tools)} tools."
+        )
         try:
-            # Prepare parameters for the call
-            params = {
-                "model": self.model_id,
-                "temperature": temperature,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-            }
-
-            # Add optional parameters if provided
-            if system_prompt:
-                params["system"] = system_prompt
-
-            # Call Anthropic message creation
-            response = self.client.messages.create(**params)
-
-            return {
-                "status": "success",
-                "response": response.content[0].text,
-                "raw_response": response,
-            }
+            response = self.client.messages.create(
+                model=self.model_id,
+                system=system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice={"type": "auto"},
+                max_tokens=4096,
+                temperature=0.1,
+            )
+            logger.info(f"Received response. Stop reason: {response.stop_reason}")
+            return response
         except Exception as e:
-            return {"status": "error", "message": str(e)}
-
-    def generate_stream(
-        self, prompt, system_prompt=None, max_tokens=4096, temperature=0.7
-    ):
-        """
-        Generate a streaming response from the LLM.
-
-        Args:
-            prompt (str): The user prompt to send to the LLM
-            system_prompt (str, optional): System instructions for the LLM. Defaults to None.
-            max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 4096.
-            temperature (float, optional): Sampling temperature. Defaults to 0.7.
-
-        Returns:
-            generator: A generator that yields chunks of the response text
-        """
-        try:
-            # Prepare parameters for the call
-            params = {
-                "model": self.model_id,
-                "temperature": temperature,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": True,
-                "max_tokens": max_tokens,
-            }
-
-            # Add optional parameters if provided
-            if system_prompt:
-                params["system"] = system_prompt
-
-            # Call Anthropic message creation with streaming
-            stream = self.client.messages.create(**params)
-
-            # Process the streaming response
-            for chunk in stream:
-                if len(chunk.delta.text) > 0:
-                    yield {
-                        "status": "success",
-                        "chunk": chunk.delta.text,
-                        "raw_chunk": chunk,
-                    }
-        except Exception as e:
-            yield {"status": "error", "message": str(e)}
+            logger.error(f"Anthropic API call failed: {e}", exc_info=True)
+            return None
