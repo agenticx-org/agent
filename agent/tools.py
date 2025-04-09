@@ -2,9 +2,14 @@ import inspect
 import json
 import logging
 import random
-from typing import Any, Callable, Dict, List
+from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
 logger = logging.getLogger("CLI_Agent")
+
+# Import for type checking only to avoid circular imports
+if TYPE_CHECKING:
+    from agent.code_executor import CodeExecutor
+    from agent.state_manager import StateManager
 
 # --- Tool Implementations ---
 
@@ -74,10 +79,7 @@ class ToolManager:
         code_executor: "CodeExecutor",
         allowed_imports: List[str],
     ):
-        # These forward references will be resolved at runtime
-        from agent.code_executor import CodeExecutor
-        from agent.state_manager import StateManager
-
+        # No need to import here since we have TYPE_CHECKING imports at the module level
         self.state_manager = state_manager
         self.code_executor = code_executor
         self.allowed_imports = allowed_imports
