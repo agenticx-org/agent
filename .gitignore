@@ -8,3 +8,4 @@ wheels/
 
 # Virtual environments
 .venv
+search/bert_topic.pkl
