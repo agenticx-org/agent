@@ -1,0 +1,125 @@
+This is a document for the events interface for the backend.
+
+Input JSON:
+
+event = {
+  "name" : "chat_message",
+  "message": {
+      "content" : "Hi, I would like to create a research report about gold please",
+      "role": "user"
+  }
+  "model":"claude sonnet 3.7 thinking",
+  "mode":"chat",
+  "block_id":"234234234AWEFAWEF",
+  "document_id":"AWEFAWE3453453453",
+  "chat_id":"34234DFAWFA", # to load the context of the conversation
+  "user_id":"23423423AWEFAWEFAWEF", # current authenticated user
+}
+
+event_names = [
+    "message",
+    "stop", # stops current processing and stops listening to the chat_id
+    "pause", # stops current LLM processing by continues listening to the chat_id
+]
+
+modes = [
+  "chat",
+  "agent"
+]
+
+Output JSON:
+
+The output is streamed to the user. This needs to be minimal as the header is repeated for each chunk.
+
+The block_id identified where in the page the content is rendered, and saved. For example, there will be a specific block_id for every ChatMessage. 
+
+FLOW #1: Command from user 
+
+The command from the user can either come from the chat interface on the right, or from a block in the document itself.
+
+- websocket is connected in a new thread - a server communication processing thread
+- client sends an event to the server, optinally with a block_id
+- the event optionally has a block_id, the client may create this if they are creating a new UI component
+- it is up to the client to refresh a block, deleting existing content, if required.
+- the event is received on the server side
+- if the event does not have a block_id a new one is generated
+- the server starts processing the request in a new thread - a server agent processing thread
+- the server agent processing thread is found by chat_id (or document_id as well), if there is an existing one it is sent a command
+- (See Agent Processing Thread below)
+- when the server has some results available in the agent processing thread - it hands it to the communication thread
+- the communication thread sends a chunk to the UI
+- the UI recieves a chunk and locates the correct component by block_id
+- if no existing block_id is found, a new block is added in the UI. If a document_id is provided it is added to the end of the existing document,
+  otherwise it is added to the chat / agent window.
+- if an existing block_id is found the content is appended to the content of that block in the UI and rendered
+
+chunk = {
+  "type": "md", # content type of the chunk
+  "block_ids": "344342EAFWEEF", # globally unique block ids, both persisted in the database and to identify the UI component. Comma separated.
+  "document_id": "8378373FAWEFAWEF", # unique document id, not always present
+  "content": " that is go", # partial content returned
+  "status": "complete", # indication that it is the end of a block
+  "new_doc": false, # indication that a completely new document structure is being provided
+}
+
+chunk_types = [
+  "md", # markdown content
+  "csv", # csv file with header on first row
+  "image/jpg", # image to partially render
+  "status", # simply a status message
+]
+
+We will need some way to pass metadata as well to each block. As we have this requirement, we can specify specific chunk_types, such as "interative_chart"
+and have an expected header to be first recieved when rendering the block.
+
+This is a flexible set-up. For example if we want to do away with blocks for the document itself, we can consider the entire document a block and re-render
+it every time.
+
+Agent Processing Thread
+
+When an agent it processing a request it will follow the following flow:
+
+- Load the existing document or chat for context if they are provided
+- Possibly create a document or chat if they do not exist (or the UI might do this so we can assume they do exist)
+- Call an LLM in a streaming mode
+- Recive a response chunk from the LLM
+- Save the chunk in the database to the chat and/or document (when do we store which?)
+- Return the chunk to the communication thread to be sent to the client
+- Continue listening for events with the same chat_id (up until a timeout)
+- If it is a pause or stop event, also stop all current LLM calls, is stop, stop listening
+- Also make function calls is the LLM returns a Tool response
+- Call the LLM again after a function call response is recieved and stream the chunks to the user
+
+New document:
+
+One of the tools available is the ability to plan your document. This is indicated by the 'new_doc' flag in the chunk. If this is true,
+the UI for the document is refreshed and blocks that are recieved are rendered one at a time.
+
+FLOW #2: Reloading Document or ChatMessage
+
+When the page is reloaded, a document content is loaded from the database. 
+
+Similarly, the user can see their previous chats and they are loaded from the database.
+
+FLOW #3: Accepting a change
+
+When a new block is complete and written to the UI, and when an end event is recieved, the UI of that block will be updated with that new content.
+
+For each Block and Document in the database, it has the concept of 'current' or 'new' content.
+
+The user has the ability to:
+- If it is a block in the document, to accept the changes and set the 'new' to the 'current' content. Or revert, and delete the 'new' content.
+- If it is a block in the chat, to apply the new content to the current document either replacing the existing content
+if it is an existing block, or adding a new block. We need to somehow know which block to add it after. To start with we can just
+add it to the end.
+
+Domain model:
+
+The current domain model is as follows:
+
+Chat - an interactive session with the user consisting of a sequence of messages which are also Blocks
+Document - a sorted collection of Blocks
+Block - an element of content which is displayed to the user and consists of data and metadata about how to render it
+Agent - an orchestrator which listens to commands from the user and performs actions on their behalf
+Comms - a processor which manages the websockets and their threads and sends and recieves data on these channels
+User - a user of the application and their profile, owns a series of Documents and Chats

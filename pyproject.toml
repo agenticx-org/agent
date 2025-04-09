@@ -3,9 +3,26 @@ name = "research-inc-agent"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
   "bs4",
   "numpy",
-  "bertopic"
+  "bertopic",
+  "model2vec",
+  "spacy",
+  "datasets",
+  "fastapi",
+  "uvicorn",
+  "gunicorn",
+  "anthropic"
 ]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
