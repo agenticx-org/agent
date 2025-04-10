@@ -3,7 +3,7 @@ import json
 import logging
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 from agent.code_executor import CodeExecutor
 from agent.llm import LLMInteraction
@@ -61,7 +61,9 @@ class Agent:
         self._output_json(
             {"type": "status", "content": "Agent initialized successfully."}
         )
-        self._output_json({"type": "plan", "content": self.state_manager.get_plan()})
+        self._output_json(
+            {"id": "initial", "type": "plan", "content": self.state_manager.get_plan()}
+        )
 
     def _prepare_initial_globals(self) -> Dict[str, Any]:
         """Prepares the initial global scope for the CodeExecutor."""
@@ -105,49 +107,99 @@ class Agent:
             system_prompt = self.state_manager.get_system_prompt()
             tool_definitions = self.tool_manager.get_tool_definitions()
 
-            # 2. Call LLM
+            # 2. Call LLM (Streaming)
             self._output_json({"type": "status", "content": "Calling LLM..."})
-            response_message = self.llm.generate_response(
+            llm_call_id = None
+            final_message = None
+            stream_generator = self.llm.generate_response_stream(
                 messages, system_prompt, tool_definitions
             )
 
-            if response_message is None or response_message.content is None:
+            # Consume the stream and output chunks
+            try:
+                while True:
+                    chunk = next(stream_generator)
+                    self._output_json(chunk)  # Output each chunk (llm_chunk or error)
+                    # Keep track of the ID from the first chunk
+                    if llm_call_id is None and "id" in chunk:
+                        llm_call_id = chunk["id"]
+
+            except StopIteration as e:
+                # The generator is exhausted, capture the return value
+                # The return value is a tuple (llm_call_id, final_message_object)
+                if e.value:
+                    llm_call_id_from_return, final_message = e.value
+                    # Ensure we have the ID, either from chunks or return value
+                    if llm_call_id is None:
+                        llm_call_id = llm_call_id_from_return
+                else:
+                    # Handle case where StopIteration has no value (e.g., an error occurred before yielding anything)
+                    # If llm_call_id wasn't set from an error chunk, generate one for consistency? Or rely on logger?
+                    # For now, assume an error chunk was yielded if e.value is None
+                    if llm_call_id is None:
+                        llm_call_id = "error-no-id"  # Fallback ID
+                    final_message = None  # Ensure final_message is None on stream error
+
+            # Add LLM call ID to status message for clarity
+            self._output_json(
+                {"id": llm_call_id, "type": "status", "content": "LLM stream finished."}
+            )
+
+            # Check if the stream failed or returned empty content
+            if final_message is None or final_message.content is None:
                 self._output_json(
                     {
+                        "id": llm_call_id,  # Add ID
                         "type": "error",
-                        "content": "LLM interaction failed or returned empty content. Terminating.",
+                        "content": "LLM stream failed or returned empty content. Terminating.",
                     }
                 )
                 break
 
-            # Add assistant's response message to history before processing
-            self.state_manager.add_assistant_message(response_message.content)
+            # Add assistant's *complete* response message to history before processing
+            # Important: Use final_message here, which is the complete Anthropic message object
+            self.state_manager.add_assistant_message(final_message.content)
 
-            # 3. Process LLM response blocks
+            # 3. Process LLM response blocks from the final message
             executed_tool_this_turn = False
-            for block in response_message.content:
+            for block in final_message.content:
                 if block.type == "text":
-                    self._output_json({"type": "thought", "content": block.text})
+                    # We no longer output the full thought here, it was streamed as chunks
+                    # self._output_json({"type": "thought", "content": block.text})
+                    pass  # Thought content was already streamed
 
                 elif block.type == "tool_use":
                     tool_name = block.name
                     tool_input = block.input
-                    tool_use_id = block.id
+                    tool_use_id = block.id  # Keep the tool_use_id from Anthropic
                     executed_tool_this_turn = True
 
-                    # Log the tool call
+                    # Log the tool call with the LLM call ID
                     self._output_json(
-                        {"type": "tool_call", "tool": tool_name, "args": tool_input}
+                        {
+                            "id": llm_call_id,
+                            "type": "tool_call",
+                            "tool": tool_name,
+                            "args": tool_input,
+                        }  # Add ID
                     )
 
                     # Special handling for code execution
                     if tool_name == "execute_python":
                         self._output_json(
-                            {"type": "code", "content": tool_input.get("code", "")}
+                            {
+                                "id": llm_call_id,
+                                "type": "code",
+                                "content": tool_input.get("code", ""),
+                            }  # Add ID
                         )
 
                     self._output_json(
-                        {"type": "status", "content": f"Executing tool: {tool_name}..."}
+                        {
+                            "id": llm_call_id,
+                            "type": "status",
+                            "content": f"Executing tool: {tool_name}...",
+                        }  # Add ID
                     )
 
                     # Execute the tool
@@ -163,8 +215,9 @@ class Agent:
                         is_error = True
                         result_content_for_llm = f"Error during execution: {result['error']}"  # Pass error string to LLM
 
-                    # Format tool result as JSON
+                    # Format tool result as JSON, including LLM call ID
                     result_output = {
+                        "id": llm_call_id,  # Add ID
                         "type": "tool_result",
                         "tool": tool_name,
                         "success": not is_error,
@@ -182,6 +235,7 @@ class Agent:
                     self._output_json(result_output)
 
                     # Add tool result message to state for the *next* LLM call
+                    # Use the original tool_use_id provided by Anthropic
                     self.state_manager.add_tool_result(
                         tool_use_id=tool_use_id,
                         result=result_content_for_llm,  # Send stringified/error detail to LLM
@@ -190,10 +244,11 @@ class Agent:
 
             if (
                 not executed_tool_this_turn
-                and response_message.stop_reason == "stop_sequence"
+                and final_message.stop_reason == "stop_sequence"  # Use final_message
             ):
                 self._output_json(
                     {
+                        "id": llm_call_id,  # Add ID
                         "type": "warning",
                         "content": "LLM finished turn without using a tool. Task may be stalled.",
                     }
@@ -204,24 +259,45 @@ class Agent:
             time.sleep(0.5)
 
         # Loop finished
-        self._output_json({"type": "execution_complete"})
+        # Add ID 'final' to these terminal messages
+        self._output_json({"id": "final", "type": "execution_complete"})
         if self.state_manager.check_done():
             final_answer = self.state_manager.get_final_answer()
-            self._output_json({"type": "final_answer", "content": final_answer})
             self._output_json(
-                {"type": "status", "content": "Task completed successfully."}
+                {"id": "final", "type": "final_answer", "content": final_answer}
+            )
+            self._output_json(
+                {
+                    "id": "final",
+                    "type": "status",
+                    "content": "Task completed successfully.",
+                }
             )
         elif iterations >= max_iterations:
             self._output_json(
-                {"type": "error", "content": "Agent reached maximum iterations."}
+                {
+                    "id": "final",
+                    "type": "error",
+                    "content": "Agent reached maximum iterations.",
+                }
             )
             self._output_json(
-                {"type": "status", "content": "Task incomplete (max iterations)."}
+                {
+                    "id": "final",
+                    "type": "status",
+                    "content": "Task incomplete (max iterations).",
+                }
             )
         else:
             self._output_json(
-                {"type": "warning", "content": "Agent loop exited unexpectedly."}
+                {
+                    "id": "final",
+                    "type": "warning",
+                    "content": "Agent loop exited unexpectedly.",
+                }
             )
-            self._output_json({"type": "status", "content": "Task incomplete."})
+            self._output_json(
+                {"id": "final", "type": "status", "content": "Task incomplete."}
+            )
 
         return self.state_manager.get_final_answer()
